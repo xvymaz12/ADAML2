@@ -266,7 +266,190 @@ while len(validation_predictions) < len(validation_target):
   last_x = np.roll(last_x, -1) # shift everything one spot to the left, we replace it with the latest forecasted prediction. Multi-step predictions.
   last_x[-1] = p
 
+
+
 plt.plot(validation_target, label="forecast_target")
 plt.plot(validation_predictions, label="forecast_prediction")
 plt.legend()
 plt.show()
+
+from keras.models import Sequential
+from keras.layers import SimpleRNN, LSTM
+from tensorflow.keras.optimizers import RMSprop
+from keras.utils import plot_model
+
+"""RNN"""
+
+num_units = 128
+num_features = 4
+num_dense = 64
+lr = 0.001
+
+modelRNN = Sequential()
+modelRNN.add(SimpleRNN(units=num_units, input_shape=(1,num_features), activation="relu"))
+modelRNN.add(Dense(num_dense, activation="relu"))
+modelRNN.add(Dense(1))
+modelRNN.compile(loss='mean_squared_error', optimizer=RMSprop(learning_rate=lr),metrics=['mse'])
+modelRNN.summary()
+
+RNN_img_file = '/tmp/model_1.jpg'
+
+plot_model(
+    modelRNN,
+    to_file=RNN_img_file,
+    show_shapes=True,
+    show_layer_activations=True,
+)
+
+RNN_img = plt.imread(RNN_img_file)
+plt.axis('off')
+plt.imshow(RNN_img)
+plt.show()
+
+"""LSTM"""
+
+modelLSTM = Sequential()
+modelLSTM.add(LSTM(num_units, input_shape=(1,num_features), return_sequences=True, activation="relu"))
+modelLSTM.add(Dense(num_dense, activation="relu"))
+modelLSTM.add(Dense(1))
+modelLSTM.compile(loss='mean_squared_error', optimizer=RMSprop(learning_rate=lr),metrics=['mse'])
+modelLSTM.summary()
+
+LSTM_img_file = '/tmp/model_2.jpg'
+
+plot_model(
+    modelLSTM,
+    to_file=LSTM_img_file,
+    show_shapes=True,
+    show_layer_activations=True,
+)
+
+LSTM_img = plt.imread(LSTM_img_file)
+plt.axis('off')
+plt.imshow(LSTM_img)
+plt.show()
+
+#Creating dataset for model training
+df = climate_data_clean
+train_split = 0.8
+# Split the data into training and testing sets
+train_size = int(len(df) * train_split)
+dl_train, dl_test = df.iloc[:train_size], df.iloc[train_size:]
+print(len(dl_train), len(dl_test))
+
+# Normalizing data with min-max scaling
+from sklearn.preprocessing import MinMaxScaler
+# code based on this example : https://www.kaggle.com/code/humagonen/time-series-arima-sarima-prophet-rnn-lstm-gru/notebook#--9)-SimpleRNN-Model-
+# Initialize the MinMaxScaler
+minmax_scaler = MinMaxScaler()
+
+dl_train[['meantemp', 'humidity', 'wind_speed', 'meanpressure']] = minmax_scaler.fit_transform(dl_train[['meantemp', 'humidity', 'wind_speed', 'meanpressure']])
+dl_test[['meantemp', 'humidity', 'wind_speed', 'meanpressure']] = minmax_scaler.transform(dl_test[['meantemp', 'humidity', 'wind_speed', 'meanpressure']])
+
+# Creating data set
+def create_dataset(X, y, time_steps=1):
+    Xs, ys = [], []
+    for i in range(len(X) - time_steps):
+        v = X.iloc[i:(i + time_steps)].values
+        Xs.append(v)
+        ys.append(y.iloc[i + time_steps])
+    return np.array(Xs), np.array(ys)
+
+
+sequence_length = 4
+X_train, y_train = create_dataset(dl_train, dl_train['meantemp'], sequence_length)
+X_test, y_test = create_dataset(dl_test, dl_test['meantemp'], sequence_length)
+
+# Transformer model building code from example: https://github.com/jeffheaton/t81_558_deep_learning/blob/master/t81_558_class_10_5_keras_transformers.ipynb
+
+from tensorflow import keras
+from tensorflow.keras import layers
+
+# function to define transformer nn architecture
+def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
+    # Normalization and Attention
+    x = layers.LayerNormalization(epsilon=1e-6)(inputs)
+    x = layers.MultiHeadAttention(
+        key_dim=head_size, num_heads=num_heads, dropout=dropout
+    )(x, x)
+    x = layers.Dropout(dropout)(x)
+    res = x + inputs
+
+    # Feed Forward Part
+    x = layers.LayerNormalization(epsilon=1e-6)(res)
+    x = layers.Conv1D(filters=ff_dim, kernel_size=1, activation="relu")(x)
+    x = layers.Dropout(dropout)(x)
+    x = layers.Conv1D(filters=inputs.shape[-1], kernel_size=1)(x)
+    return x + res
+
+# function to build transformer nn
+def build_model(
+    input_shape,
+    head_size,
+    num_heads,
+    ff_dim,
+    num_transformer_blocks,
+    mlp_units,
+    dropout=0,
+    mlp_dropout=0,
+):
+    inputs = keras.Input(shape=input_shape)
+    x = inputs
+    for _ in range(num_transformer_blocks):
+        x = transformer_encoder(x, head_size, num_heads, ff_dim, dropout)
+
+    x = layers.GlobalAveragePooling1D(data_format="channels_first")(x)
+    for dim in mlp_units:
+        x = layers.Dense(dim, activation="relu")(x)
+        x = layers.Dropout(mlp_dropout)(x)
+    outputs = layers.Dense(1)(x)
+    return keras.Model(inputs, outputs)
+
+# Transformer model parameters and model setup
+
+# Parameters
+sequence_length = 4  #  time steps
+num_features = 4
+input_shape = (sequence_length, num_features)
+head_size = 4  #  head size
+num_heads = 2 # number of heads
+ff_dim = 4  # feed-forward dimension
+num_transformer_blocks = 1  #  transformer block number
+mlp_units = [32]  # dense layers mlp
+dropout = 0.1  # dropout transformer
+mlp_dropout = 0.1  # dropout in mlp
+
+# Building the tranformer model
+modelTransformer = build_model(
+    input_shape,
+    head_size,
+    num_heads,
+    ff_dim,
+    num_transformer_blocks,
+    mlp_units,
+    dropout,
+    mlp_dropout,
+)
+
+# Compile transformer model
+modelTransformer.compile(
+    loss="mean_squared_error",
+    optimizer=keras.optimizers.Adam(learning_rate=1e-4)
+)
+modelTransformer.summary()
+
+TNN_img_file = '/tmp/model_3.jpg'
+
+plot_model(
+    modelTransformer,
+    to_file=TNN_img_file,
+    show_shapes=True,
+    show_layer_activations=True,
+)
+
+plt.figure(figsize=(16, 16))
+TNN_img = plt.imread(TNN_img_file)
+plt.axis('off')
+plt.imshow(TNN_img)
+plt.show()
+
