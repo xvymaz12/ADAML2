@@ -210,10 +210,6 @@ plt.figure()
 plot_acf(climate_data["meanpressure"])
 plt.title("Mean pressure autocorrelation")
 
-"""Baseline model"""
-
-# Basline autoregressive model
-
 import tensorflow as tf
 import numpy as np
 
@@ -221,6 +217,8 @@ from tensorflow.keras.layers import Input, Dense
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers.legacy import SGD, Adam
 from tensorflow.keras.optimizers import Adam
+
+"""Baseline autoregressive model"""
 
 # Build the dataset
 T =100
@@ -288,57 +286,7 @@ from keras.models import Sequential
 from keras.layers import SimpleRNN, LSTM
 from tensorflow.keras.optimizers import RMSprop
 from keras.utils import plot_model
-
-"""RNN (plan)"""
-
-num_units = 128
-num_features = 4
-num_dense = 64
-lr = 0.001
-
-modelRNN = Sequential()
-modelRNN.add(SimpleRNN(units=num_units, input_shape=(1,num_features), activation="relu"))
-modelRNN.add(Dense(num_dense, activation="relu"))
-modelRNN.add(Dense(1))
-modelRNN.compile(loss='mean_squared_error', optimizer=RMSprop(learning_rate=lr),metrics=['mse'])
-modelRNN.summary()
-
-RNN_img_file = '/tmp/model_1.jpg'
-
-plot_model(
-    modelRNN,
-    to_file=RNN_img_file,
-    show_shapes=True,
-    show_layer_activations=True,
-)
-
-RNN_img = plt.imread(RNN_img_file)
-plt.axis('off')
-plt.imshow(RNN_img)
-plt.show()
-
-"""LSTM (plan)"""
-
-modelLSTM = Sequential()
-modelLSTM.add(LSTM(num_units, input_shape=(1,num_features), return_sequences=True, activation="relu"))
-modelLSTM.add(Dense(num_dense, activation="relu"))
-modelLSTM.add(Dense(1))
-modelLSTM.compile(loss='mean_squared_error', optimizer=RMSprop(learning_rate=lr),metrics=['mse'])
-modelLSTM.summary()
-
-LSTM_img_file = '/tmp/model_2.jpg'
-
-plot_model(
-    modelLSTM,
-    to_file=LSTM_img_file,
-    show_shapes=True,
-    show_layer_activations=True,
-)
-
-LSTM_img = plt.imread(LSTM_img_file)
-plt.axis('off')
-plt.imshow(LSTM_img)
-plt.show()
+from sklearn.preprocessing import MinMaxScaler
 
 """Dataset for model training
 
@@ -355,7 +303,6 @@ dl_train, dl_test = df.iloc[:train_size], df.iloc[train_size:]
 print(len(dl_train), len(dl_test))
 
 # Normalizing data with min-max scaling
-from sklearn.preprocessing import MinMaxScaler
 # Initialize the MinMaxScaler
 minmax_scaler = MinMaxScaler()
 
@@ -378,20 +325,19 @@ dl_test[['meantemp', 'humidity', 'wind_speed', 'meanpressure']] = minmax_scaler.
 #dl_test[['meanremp']] = target_scaler.transform(dl_test[['meantemp']])
 
 # Creating data set
-def create_dataset(X, y, time_steps=1):
+def create_dataset(X, y, time_steps=1, forecast_steps=1):
     Xs, ys = [], []
-    for i in range(len(X) - time_steps):
-        v = X.iloc[i:(i + time_steps)].values
-        Xs.append(v)
-        ys.append(y.iloc[i + time_steps])
+    for i in range(len(X) - time_steps - forecast_steps + 1):
+        Xs.append(X.iloc[i:(i + time_steps)].values)
+        ys.append(y.iloc[(i + time_steps):(i + time_steps + forecast_steps)].values)
     return np.array(Xs), np.array(ys)
-
 
 #sequence_length = 4
 #sequence_length = 31
 sequence_length = 7
-X_train, y_train = create_dataset(dl_train, dl_train['meantemp'], sequence_length)
-X_test, y_test = create_dataset(dl_test, dl_test['meantemp'], sequence_length)
+forecast_steps = 1
+X_train, y_train = create_dataset(dl_train, dl_train['meantemp'], sequence_length, forecast_steps)
+X_test, y_test = create_dataset(dl_test, dl_test['meantemp'], sequence_length, forecast_steps)
 
 print(X_train.shape)
 print(y_train.shape)
@@ -408,7 +354,7 @@ patiance = 10
 # Build the model
 rnn_model = Sequential()
 rnn_model.add(SimpleRNN(num_hidden_units, activation='tanh', input_shape=(sequence_length, X_train.shape[2])))
-rnn_model.add(Dense(1))
+rnn_model.add(Dense(forecast_steps))
 rnn_model.compile(optimizer='adam', loss='mse')
 
 # Define early stopping callback
@@ -442,9 +388,10 @@ rnn_pred = rnn_model.predict(X_test)
 #rnn_pred = target_scaler.inverse_transform(rnn_pred)  # Inverse transform to original scale
 #rnn_pred = minmax_scaler.inverse_transform(rnn_pred)  # Inverse transform to original scale
 # NOTE: to get the inverse transform to work need seperate target_scaler, had error when I tried it
+rnn_pred = rnn_pred.reshape(-1)
 
 # Inverse transform the true values for comparison
-y_test = y_test.reshape(-1, 1)
+y_test = y_test.reshape(-1)
 #y_test = minmax_scaler.inverse_transform(y_test)
 
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
@@ -709,9 +656,9 @@ def build_model(
     outputs = layers.Dense(1)(x)
     return keras.Model(inputs, outputs)
 
-print(X_train.shape[1:])
 
-input_shape = (X_train.shape[1], X_train.shape[2])  # (4, 4)
+
+input_shape = (X_train.shape[1], X_train.shape[2])
 
 modelTransformer = build_model(
     input_shape,
@@ -815,6 +762,8 @@ history_transformer = modelTransformer.fit(
 
 modelTransformer.evaluate(X_test, y_test, verbose=1)
 
+
+
 training_loss = history_transformer.history['loss']
 validation_loss = history_transformer.history['val_loss']
 
@@ -867,3 +816,211 @@ TNN_img = plt.imread(TNN_img_file)
 plt.axis('off')
 plt.imshow(TNN_img)
 plt.show()
+
+"""TNN Testing the Forecasting Power"""
+
+# Creating dataset for model training
+df = climate_data_clean
+train_split = 0.8
+# Split the data into training and testing sets
+train_size = int(len(df) * train_split)
+dl_train, dl_test = df.iloc[:train_size], df.iloc[train_size:]
+print(len(dl_train), len(dl_test))
+
+# Normalizing data with min-max scaling
+from sklearn.preprocessing import MinMaxScaler
+# Initialize the MinMaxScaler
+minmax_scaler = MinMaxScaler()
+
+dl_train[['meantemp', 'humidity', 'wind_speed', 'meanpressure']] = minmax_scaler.fit_transform(dl_train[['meantemp', 'humidity', 'wind_speed', 'meanpressure']])
+dl_test[['meantemp', 'humidity', 'wind_speed', 'meanpressure']] = minmax_scaler.transform(dl_test[['meantemp', 'humidity', 'wind_speed', 'meanpressure']])
+
+# Creating data set
+def create_multistep_dataset(X, y, time_steps, forecast_steps):
+    Xs, ys = [], []
+    for i in range(len(X) - time_steps - forecast_steps + 1):
+        Xs.append(X.iloc[i:(i + time_steps)].values)
+        ys.append(y.iloc[(i + time_steps):(i + time_steps + forecast_steps)].values)
+    return np.array(Xs), np.array(ys)
+
+
+#forecast_length = 1
+#sequence_length = 7
+
+forecast_length = 56
+sequence_length = forecast_length*2
+
+X_train_m, y_train_m = create_multistep_dataset(dl_train, dl_train['meantemp'], sequence_length, forecast_length)
+X_test_m, y_test_m = create_multistep_dataset(dl_test, dl_test['meantemp'], sequence_length,forecast_length)
+
+print(X_train.shape[0:])
+print(y_train.shape[0:])
+print(X_train_m.shape[0:])
+print(y_train_m.shape[0:])
+
+# TNN model architecture for multistep forecast
+
+def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
+    # Normalization and Attention
+    x = layers.LayerNormalization(epsilon=1e-6)(inputs)
+    x = layers.MultiHeadAttention(
+        key_dim=head_size, num_heads=num_heads, dropout=dropout
+    )(x, x)
+    x = layers.Dropout(dropout)(x)
+    res = x + inputs
+
+    # Feed Forward Part
+    x = layers.LayerNormalization(epsilon=1e-6)(res)
+    x = layers.Conv1D(filters=ff_dim, kernel_size=1, activation="relu")(x)
+    x = layers.Dropout(dropout)(x)
+    # Match feature dimensions explicitly
+    x = layers.Conv1D(filters=inputs.shape[-1], kernel_size=1)(x)
+    return x + res
+
+
+# function to build transformer nn
+def build_model(
+    input_shape,
+    forecast_period,
+    head_size,
+    num_heads,
+    ff_dim,
+    num_transformer_blocks,
+    mlp_units,
+    dropout=0,
+    mlp_dropout=0,
+):
+    inputs = keras.Input(shape=input_shape)
+    x = inputs
+    for _ in range(num_transformer_blocks):
+        x = transformer_encoder(x, head_size, num_heads, ff_dim, dropout)
+
+    x = layers.GlobalAveragePooling1D(data_format="channels_first")(x)
+    for dim in mlp_units:
+        x = layers.Dense(dim, activation="relu")(x)
+        x = layers.Dropout(mlp_dropout)(x)
+    outputs = layers.Dense(forecast_length)(x)
+
+    return keras.Model(inputs, outputs)
+
+
+# building the model
+input_shape = (X_train_m.shape[1], X_train_m.shape[2])  # window length & number of features
+modelTransformer = build_model(
+    input_shape,
+    forecast_period=forecast_length,
+    #head_size=256,
+    head_size=64,
+    num_heads=4,
+    ff_dim=64,
+    #num_transformer_blocks=4,
+    num_transformer_blocks=6,
+    mlp_units=[64],
+    #mlp_units=[128],
+    dropout=0,
+    mlp_dropout=0,
+)
+
+# compile m,odel
+modelTransformer.compile(
+    loss="mean_squared_error",
+    optimizer=keras.optimizers.Adam(learning_rate=1e-3)
+)
+
+modelTransformer.summary()
+
+#Training the tnn model
+#print(X_train_m.shape[0:])
+#print(y_train_m.shape[0:]
+
+callbacks = [
+    keras.callbacks.EarlyStopping(patience=10, restore_best_weights=True)
+]
+
+history_transformer = modelTransformer.fit(
+    X_train_m,
+    y_train_m,
+    validation_split=0.2,
+    epochs=50,
+    batch_size=32,
+    callbacks=callbacks,
+)
+
+modelTransformer.evaluate(X_test_m, y_test_m, verbose=1)
+
+training_loss = history_transformer.history['loss']
+validation_loss = history_transformer.history['val_loss']
+
+
+plt.figure(figsize=(10, 6))
+plt.plot(training_loss, label='Training Loss', color='blue')
+plt.plot(validation_loss, label='Validation Loss', color='orange')
+plt.xlabel('Epoch')
+plt.ylabel('Loss (MSE)')
+plt.title('Transformer training and validation Loss')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+print(X_test_m.shape[:])
+print(y_test_m.shape[:])
+
+y_pred_m = modelTransformer.predict(X_test_m)
+print(y_pred_m)
+print(y_pred_m.shape[:])
+
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import r2_score
+import matplotlib.cm as cm
+# normalized predictions
+y_pred_m = modelTransformer.predict(X_test_m)
+
+#Evaluation metrics
+mse = mean_squared_error(y_test_m.reshape(-1), y_pred_m.reshape(-1))
+print(f"Multi preds RMSE: {mse}")
+
+# flattening the values fir R2 calculation
+y_test_flat = y_test_m.reshape(-1)
+y_pred_flat = y_pred_m.reshape(-1)
+r2 = r2_score(y_test_flat, y_pred_flat)
+print(f"Multi preds R2 Score: {r2}")
+
+"""Forecasting power
+
+
+**forecast_length = 1 & sequence_length 7**
+
+Multi preds RMSE: 0.004671164730933246
+
+Multi preds R2 Score: 0.8460664054355885
+
+
+**forecast_length = 7 & sequence_length 14**
+
+Multi preds RMSE: 0.006019356566007423
+
+Multi preds R2 Score: 0.7917254401771254
+
+
+**forecast_length = 14 & sequence_length 28**
+
+Multi preds RMSE: 0.007516551482331121
+
+Multi preds R2 Score: 0.7350730823224043
+
+
+
+**forecast_length = 28 & sequence_length 56**
+
+Multi preds RMSE: 0.005281720357395312
+
+Multi preds R2 Score: 0.7881801016934167
+
+
+**forecast_length = 56 & sequence_length 112**
+
+Multi preds RMSE: 0.017549735508834756
+
+Multi preds R2 Score: 0.043753610413577726
+"""
+
